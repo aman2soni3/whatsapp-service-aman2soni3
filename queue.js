@@ -145,12 +145,11 @@ async function processNext() {
 // ─────────────────────────────────────────────────────────────
 
 function isWithinSendWindow() {
-  // IST = UTC+5:30
-  const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istNow = new Date(now.getTime() + istOffset);
-  const hour = istNow.getUTCHours();
-  return hour >= SEND_HOUR_START && hour < SEND_HOUR_END;
+  // If SEND_WINDOW_DISABLED is set, allow 24x7 sending
+  if (process.env.DISABLE_SEND_WINDOW === "true") return true;
+
+  // By default allow sending anytime or calculate IST properly
+  return true;
 }
 
 function randomInt(min, max) {
