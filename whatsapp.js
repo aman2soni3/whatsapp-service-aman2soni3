@@ -13,7 +13,8 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  delay
+  delay,
+  Browsers
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const QRCode = require("qrcode");
@@ -60,7 +61,7 @@ async function createWASession() {
       auth: state,
       printQRInTerminal: true,
       logger: pino({ level: "silent" }),
-      browser: ["PTWA Admin Portal", "Chrome", "120.0.0"],
+      browser: Browsers ? Browsers.ubuntu("Chrome") : ["Ubuntu", "Chrome", "20.0.04"],
       syncFullHistory: false,
       generateHighQualityLinkPreview: true,
       connectTimeoutMs: 60000,
@@ -74,6 +75,7 @@ async function createWASession() {
       if (qr) {
         logger.info("New QR Code generated");
         _status.state = "QR_READY";
+        _status.lastError = null;
         try {
           _qrCode = await QRCode.toDataURL(qr);
         } catch (qrErr) {
@@ -83,12 +85,15 @@ async function createWASession() {
 
       if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const errMsg = lastDisconnect?.error?.message || `Closed with code ${statusCode}`;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        logger.warn(`WhatsApp connection closed. Status: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+        logger.warn(`WhatsApp connection closed. Status: ${statusCode}. Error: ${errMsg}. Reconnecting: ${shouldReconnect}`);
 
         _status.connected = false;
         _status.ready = false;
         _status.state = "DISCONNECTED";
+        _status.lastError = errMsg;
+        _status.statusCode = statusCode;
         _status.phone = null;
         _qrCode = null;
 
@@ -224,6 +229,34 @@ async function disconnectSession() {
   logger.info("WhatsApp session disconnected");
 }
 
+function resetSession() {
+  try {
+    if (_sock) {
+      try { _sock.end(undefined); } catch (_) {}
+      _sock = null;
+    }
+    if (fs.existsSync(SESSION_PATH)) {
+      const files = fs.readdirSync(SESSION_PATH);
+      for (const file of files) {
+        try { fs.unlinkSync(path.join(SESSION_PATH, file)); } catch (_) {}
+      }
+    }
+  } catch (err) {
+    logger.error("Reset session files error:", err);
+  }
+  _status = {
+    connected: false,
+    ready: false,
+    phone: null,
+    battery: null,
+    lastSeen: null,
+    state: "DISCONNECTED",
+    lastError: "Session reset requested",
+  };
+  _qrCode = null;
+  logger.info("WhatsApp session reset completely");
+}
+
 function getClient() { return _sock; }
 function getStatus() { return { ..._status }; }
 function getQRCode() { return _qrCode; }
@@ -236,4 +269,5 @@ module.exports = {
   sendTextMessage,
   sendDocument,
   disconnectSession,
+  resetSession,
 };

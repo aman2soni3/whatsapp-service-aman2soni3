@@ -13,7 +13,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const { createWASession, getClient, getStatus, getQRCode, disconnectSession } = require("./whatsapp");
+const { createWASession, getClient, getStatus, getQRCode, disconnectSession, resetSession } = require("./whatsapp");
 const { enqueue, startQueueWorker } = require("./queue");
 const logger = require("./logger");
 
@@ -75,6 +75,16 @@ app.post("/disconnect", requireAuth, async (req, res) => {
   try {
     await disconnectSession();
     res.json({ success: true, message: "Disconnected" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Reset session (clear wa-session folder & restart fresh) */
+app.post("/reset", requireAuth, async (req, res) => {
+  try {
+    resetSession();
+    res.json({ success: true, message: "Session reset completely" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
