@@ -26,11 +26,27 @@ const SEND_HOUR_END = 20;   // 8 PM IST
 let jobIdCounter = 1;
 
 /**
- * Add a job to the queue
+ * Add a job to the queue (with anti-duplicate protection)
  */
 async function enqueue(job) {
-  const id = `job_${Date.now()}_${jobIdCounter++}`;
-  const queueJob = { id, ...job, status: "queued", retries: 0, createdAt: new Date() };
+  const now = Date.now();
+
+  // Deduplication guard: ignore identical requests within 25 seconds
+  const isDuplicate = queue.some(
+    (j) =>
+      j.phone === job.phone &&
+      j.message === job.message &&
+      (now - new Date(j.createdAt).getTime()) < 25000 &&
+      (j.status === "queued" || j.status === "sending" || j.status === "sent" || j.status === "sent_partial")
+  );
+
+  if (isDuplicate) {
+    logger.warn(`⚠️ Ignored duplicate job for ${job.phone} within 25s window`);
+    return { id: "duplicate_skipped", skipped: true };
+  }
+
+  const id = `job_${now}_${jobIdCounter++}`;
+  const queueJob = { id, ...job, status: "queued", textSent: false, retries: 0, createdAt: new Date() };
   queue.push(queueJob);
   logger.info(`📬 Queued: ${id} → ${job.phone} (${job.type})`);
   return { id };
@@ -102,14 +118,19 @@ async function processNext() {
 
     if (job.type === "text") {
       await sendTextMessage(job.phone, job.message);
+      job.textSent = true;
     } else if (job.type === "document") {
-      // First send the caption text if any
-      if (job.message) {
+      // First send the caption text if any (ONLY ONCE!)
+      if (job.message && !job.textSent) {
         await sendTextMessage(job.phone, job.message);
+        job.textSent = true;
         // Small pause between text and document
-        await randomDelay(2000, 5000);
+        await randomDelay(1500, 3000);
       }
-      await sendDocument(job.phone, job.documentUrl, job.documentName, "");
+      if (job.documentUrl) {
+        await sendDocument(job.phone, job.documentUrl, job.documentName, "");
+        job.docSent = true;
+      }
     }
 
     job.status = "sent";
@@ -123,6 +144,18 @@ async function processNext() {
     await randomDelay(delay, delay);
 
   } catch (err) {
+    logger.error(`❌ Error in job ${job.id}:`, err.message);
+
+    // CRITICAL: If text message was ALREADY delivered to user, DO NOT RETRY TEXT!
+    // Prevents duplicate messages on the user's phone.
+    if (job.textSent) {
+      job.status = "sent_partial";
+      job.error = `Document delivery failed: ${err.message}`;
+      dailySentCount++;
+      logger.warn(`⚠️ Job ${job.id}: Text was already delivered to ${job.phone}. Aborting retries to prevent duplicate spam.`);
+      return;
+    }
+
     job.retries = (job.retries || 0) + 1;
     logger.error(`❌ Failed: ${job.id} (attempt ${job.retries}):`, err.message);
 
@@ -131,7 +164,7 @@ async function processNext() {
       job.error = err.message;
       logger.error(`💀 Giving up on job: ${job.id}`);
     } else {
-      job.status = "queued"; // Retry
+      job.status = "queued"; // Retry text if not yet sent
       // Exponential backoff: 30s, 60s, 120s
       await randomDelay(30000 * job.retries, 30000 * job.retries);
     }

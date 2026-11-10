@@ -173,8 +173,20 @@ async function sendDocument(phone, fileUrl, fileName, caption = "") {
   const jid = toJid(phone);
   logger.info(`Downloading file for WhatsApp dispatch: ${fileUrl}`);
 
-  const response = await axios.get(fileUrl, { responseType: "arraybuffer", timeout: 45000 });
+  const serviceSecret = process.env.SERVICE_SECRET_KEY || "ptwa-wa-secret";
+  const response = await axios.get(fileUrl, {
+    responseType: "arraybuffer",
+    timeout: 45000,
+    headers: {
+      "x-wa-service-key": serviceSecret,
+    },
+  });
+
   const buffer = Buffer.from(response.data);
+  const headStr = buffer.slice(0, 100).toString("utf8").trim();
+  if (headStr.startsWith("{") || headStr.startsWith("<!DOCTYPE") || headStr.startsWith("<html")) {
+    throw new Error(`File download returned non-binary content (JSON/HTML) from ${fileUrl}`);
+  }
 
   const ext = (fileName || "").split(".").pop()?.toLowerCase();
   const isImage = ["jpg", "jpeg", "png", "webp"].includes(ext);
